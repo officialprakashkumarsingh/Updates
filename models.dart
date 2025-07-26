@@ -27,7 +27,7 @@ class Message {
   final List<ThoughtContent> thoughts;
   final List<CodeContent> codes;
   final String displayText; // Text without thought and code content
-  final Map<String, dynamic> agentProcessingData; // Agent processing steps and results
+  final Map<String, dynamic> toolData; // External tools data
 
   Message({
     required this.id,
@@ -38,7 +38,7 @@ class Message {
     this.thoughts = const [],
     this.codes = const [],
     String? displayText,
-    this.agentProcessingData = const {},
+    this.toolData = const {},
   }) : displayText = displayText ?? text;
 
   factory Message.user(String text) {
@@ -51,7 +51,7 @@ class Message {
     );
   }
 
-  factory Message.bot(String text, {bool isStreaming = false, Map<String, dynamic>? agentProcessingData}) {
+  factory Message.bot(String text, {bool isStreaming = false, Map<String, dynamic>? toolData}) {
     final timestamp = DateTime.now();
     final result = _parseContent(text);
     return Message(
@@ -63,7 +63,7 @@ class Message {
       thoughts: result['thoughts'],
       codes: result['codes'],
       displayText: result['displayText'],
-      agentProcessingData: agentProcessingData ?? {},
+      toolData: toolData ?? {},
     );
   }
 
@@ -76,7 +76,7 @@ class Message {
     List<ThoughtContent>? thoughts,
     List<CodeContent>? codes,
     String? displayText,
-    Map<String, dynamic>? agentProcessingData,
+    Map<String, dynamic>? toolData,
   }) {
     final newText = text ?? this.text;
     final newDisplayText = displayText ?? (text != null ? null : this.displayText);
@@ -93,7 +93,7 @@ class Message {
         thoughts: thoughts ?? result['thoughts'],
         codes: codes ?? result['codes'],
         displayText: result['displayText'],
-        agentProcessingData: agentProcessingData ?? this.agentProcessingData,
+        toolData: toolData ?? this.toolData,
       );
     }
     
@@ -106,7 +106,7 @@ class Message {
       thoughts: thoughts ?? this.thoughts,
       codes: codes ?? this.codes,
       displayText: newDisplayText ?? this.displayText,
-      agentProcessingData: agentProcessingData ?? this.agentProcessingData,
+      toolData: toolData ?? this.toolData,
     );
   }
 

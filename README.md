@@ -9,11 +9,57 @@ AhamAI is a modern Flutter-based AI chatbot application that provides access to 
   - claude-3-7-sonnet  
   - claude-sonnet-4
   - claude-3-5-sonnet-ashlynn (custom endpoint)
+- **External Tools Integration**: AI has access to external tools and can use them on demand
+  - Screenshot tool for capturing any webpage visually
+  - AI model fetching and switching for optimal performance
+  - Web search for current information
 - Character-based conversations with customizable AI personas
 - Image generation capabilities
 - User authentication and profile management
 - Responsive and minimalistic UI design
 - Real-time chat with streaming support
+- **Tool-Aware AI**: The AI understands its external capabilities and informs users about them
+
+## External Tools System
+
+AhamAI features a sophisticated external tools system that gives the AI access to various capabilities beyond just conversation:
+
+### Available Tools
+
+1. **Screenshot Tool** (`external_tools_service.dart`)
+   - Captures screenshots of any webpage
+   - Uses WordPress mshots API for reliable screenshots
+   - Configurable dimensions and options
+   - AI can visually understand websites and help with web content
+
+2. **AI Models Management**
+   - Dynamically fetches available AI models from the API
+   - Allows switching between models when performance is suboptimal
+   - AI can recommend model changes based on user satisfaction
+   - Automatic model validation and error handling
+
+3. **Web Search**
+   - Searches Wikipedia and other sources for current information
+   - Provides up-to-date information beyond the AI's training data
+   - AI can gather recent news and information on any topic
+
+### How It Works
+
+- **AI Awareness**: The AI receives system prompts that inform it about available external tools
+- **Natural Usage**: Users can request tool functionality naturally in conversation
+- **Transparent Operation**: Clear indicators show when tools are being used
+- **Error Handling**: Robust error handling with user-friendly feedback
+- **Tool Integration**: Results are seamlessly integrated into AI responses
+
+### Example Interactions
+
+```
+User: "Can you take a screenshot of google.com?"
+AI: "I can help you with that! I have access to a screenshot tool that can capture any webpage visually. Let me take a screenshot of google.com for you..."
+
+User: "This AI model isn't working well"
+AI: "I understand your concern. I have the ability to fetch available AI models and switch to a different one that might work better for your needs. Let me check what other models are available..."
+```
 
 ## API Configuration
 
