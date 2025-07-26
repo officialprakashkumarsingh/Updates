@@ -11,8 +11,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'models.dart';
 import 'character_service.dart';
-import 'agent_service.dart';
-import 'agent_widget.dart';
+import 'external_tools_service.dart';
 
 /* ----------------------------------------------------------
    CHAT PAGE
@@ -46,7 +45,7 @@ class ChatPageState extends State<ChatPage> {
 
   http.Client? _httpClient;
   final CharacterService _characterService = CharacterService();
-  final AgentService _agentService = AgentService();
+  final ExternalToolsService _externalToolsService = ExternalToolsService();
 
   final _prompts = ['Explain quantum computing', 'Write a Python snippet', 'Draft an email to my boss', 'Ideas for weekend trip'];
   
@@ -71,7 +70,7 @@ class ChatPageState extends State<ChatPage> {
   void initState() {
     super.initState();
     _characterService.addListener(_onCharacterChanged);
-    _agentService.addListener(_onAgentServiceChanged);
+    _externalToolsService.addListener(_onExternalToolsServiceChanged);
     _updateGreetingForCharacter();
     _controller.addListener(() {
       setState(() {}); // Refresh UI when text changes
@@ -81,7 +80,7 @@ class ChatPageState extends State<ChatPage> {
   @override
   void dispose() {
     _characterService.removeListener(_onCharacterChanged);
-    _agentService.removeListener(_onAgentServiceChanged);
+    _externalToolsService.removeListener(_onExternalToolsServiceChanged);
     _controller.dispose();
     _scroll.dispose();
     _httpClient?.close();
@@ -105,9 +104,9 @@ class ChatPageState extends State<ChatPage> {
     }
   }
 
-  void _onAgentServiceChanged() {
+  void _onExternalToolsServiceChanged() {
     if (mounted) {
-      setState(() {}); // Refresh UI when agent service state changes
+      setState(() {}); // Refresh UI when external tools service state changes
     }
   }
 
@@ -195,56 +194,8 @@ class ChatPageState extends State<ChatPage> {
 
     setState(() => _awaitingReply = true);
 
-    // Check if agent mode is enabled – stream response directly in the chat bubble
-    if (_agentService.isAgentMode) {
-      try {
-        final agentResponse = await _agentService.processAgentRequest(prompt, widget.selectedModel);
-
-        // Create a streaming bot message placeholder
-        var botMessage = Message.bot('', isStreaming: true);
-        final botMessageIndex = _messages.length;
-        setState(() {
-          _messages.add(botMessage);
-        });
-
-        String accumulatedText = '';
-
-        // Simulate real-time streaming by revealing the response text character-by-character
-        for (int i = 0; i < agentResponse.text.length; i++) {
-          accumulatedText += agentResponse.text[i];
-          if (!mounted) break;
-          await Future.delayed(const Duration(milliseconds: 8));
-          setState(() {
-            _messages[botMessageIndex] = botMessage.copyWith(
-              text: accumulatedText,
-              isStreaming: true,
-            );
-          });
-          _scrollToBottom();
-        }
-
-        // Finalise the streamed message
-        if (mounted) {
-          setState(() {
-            _messages[botMessageIndex] = botMessage.copyWith(
-              text: accumulatedText,
-              isStreaming: false,
-            );
-            _awaitingReply = false;
-          });
-        }
-
-        // Update memory with the completed conversation
-        _updateConversationMemory(prompt, accumulatedText);
-        return;
-      } catch (e) {
-        // Fall back to regular chat if agent fails
-        setState(() {
-          _messages.add(Message.bot('Agent processing failed. Switching to regular mode.\n\nError: $e'));
-        });
-        _agentService.toggleAgentMode(); // Disable agent mode on failure
-      }
-    }
+    // Regular AI chat - AI is now aware of external tools it can access
+    // The AI will mention and use external tools based on user requests
 
     _httpClient = http.Client();
     final memoryContext = _getMemoryContext();
@@ -278,9 +229,35 @@ class ChatPageState extends State<ChatPage> {
         messageContent = {'role': 'user', 'content': fullPrompt};
       }
 
+      // Build system prompt with external tools information
+      final availableTools = _externalToolsService.getAvailableTools();
+      final toolsInfo = availableTools.map((tool) => 
+        '- ${tool.name}: ${tool.description}'
+      ).join('\n');
+      
+      final systemMessage = {
+        'role': 'system',
+        'content': '''You are AhamAI, an intelligent assistant with access to external tools. You can understand user requests and use appropriate tools when needed.
+
+Available External Tools:
+$toolsInfo
+
+When a user asks for something that requires external tools (like taking screenshots, searching the web, or switching AI models), you should:
+1. Acknowledge that you have the capability
+2. Explain what tool you would use
+3. Inform the user that you can access these tools on demand
+4. Provide helpful information about what the tool can do
+
+For screenshots: You can capture any webpage visually using your screenshot tool.
+For model switching: You can fetch available AI models and switch to a different one if the current model isn't performing well.
+For web search: You can search for current information on any topic.
+
+Be conversational and helpful, and let users know about your external tool capabilities when relevant.'''
+      };
+
       request.body = json.encode({
         'model': widget.selectedModel,
-        'messages': [messageContent],
+        'messages': [systemMessage, messageContent],
         'stream': true,
       });
 
@@ -619,7 +596,6 @@ class ChatPageState extends State<ChatPage> {
                   message: message,
                   onRegenerate: () => _regenerateResponse(index),
                   onUserMessageTap: () => _showUserMessageOptions(context, message),
-                  agentService: _agentService,
                 );
               },
             ),
@@ -664,8 +640,28 @@ class ChatPageState extends State<ChatPage> {
                 ],
               ),
             ),
-          // Agent status widget
-          AgentStatusWidget(agentService: _agentService),
+          // External tools status (show when tools are executing)
+          if (_externalToolsService.isExecuting)
+            Container(
+              padding: const EdgeInsets.all(16),
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 12),
+                  Text(
+                    'Using external tool: ${_externalToolsService.lastToolUsed}',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: Color(0xFF666666),
+                    ),
+                  ),
+                ],
+              ),
+            ),
                         SafeArea(
             top: false,
             left: false,
@@ -677,7 +673,7 @@ class ChatPageState extends State<ChatPage> {
               awaitingReply: _awaitingReply,
               isEditing: _editingMessageId != null,
               onCancelEdit: _cancelEditing,
-              agentService: _agentService,
+              externalToolsService: _externalToolsService,
               webSearchMode: _webSearchMode,
               onToggleWebSearch: _toggleWebSearch,
               onImageUpload: _handleImageUpload,
@@ -698,13 +694,10 @@ class _MessageBubble extends StatefulWidget {
   final Message message;
   final VoidCallback? onRegenerate;
   final VoidCallback? onUserMessageTap;
-  final AgentService agentService;
-
   const _MessageBubble({
     required this.message,
     this.onRegenerate,
     this.onUserMessageTap,
-    required this.agentService,
   });
 
   @override
@@ -1125,7 +1118,7 @@ class _InputBar extends StatelessWidget {
     required this.awaitingReply,
     required this.isEditing,
     required this.onCancelEdit,
-    required this.agentService,
+    required this.externalToolsService,
     required this.webSearchMode,
     required this.onToggleWebSearch,
     required this.onImageUpload,
@@ -1139,7 +1132,7 @@ class _InputBar extends StatelessWidget {
   final bool awaitingReply;
   final bool isEditing;
   final VoidCallback onCancelEdit;
-  final AgentService agentService;
+  final ExternalToolsService externalToolsService;
   final bool webSearchMode;
   final VoidCallback onToggleWebSearch;
   final VoidCallback onImageUpload;
@@ -1236,15 +1229,13 @@ class _InputBar extends StatelessWidget {
                     decoration: InputDecoration(
                       hintText: awaitingReply 
                           ? 'AhamAI is responding...' 
-                                                : agentService.isAgentMode && agentService.isProcessing
-                          ? 'Agent is working...'
-                          : agentService.isAgentMode
-                                  ? 'Message AhamAI...'
-                                  : webSearchMode
-                                      ? 'Web search mode - Ask me anything...'
-                                      : uploadedImagePath != null
-                                          ? 'Image uploaded - Describe or ask about it...'
-                                          : 'Message AhamAI...',
+                          : externalToolsService.isExecuting
+                              ? 'External tool is running...'
+                              : webSearchMode
+                                  ? 'Web search mode - Ask me anything...'
+                                  : uploadedImagePath != null
+                                      ? 'Image uploaded - Describe or ask about it...'
+                                      : 'Message AhamAI (with external tools)...',
                       hintStyle: const TextStyle(
                         color: Color(0xFFA3A3A3),
                         fontSize: 16,
@@ -1302,18 +1293,7 @@ class _InputBar extends StatelessWidget {
                   // Action icons row
                   Row(
                     children: [
-                                              // Enhanced Agent Icon - clean design
-                        _AnimatedModeIcon(
-                          isActive: agentService.isAgentMode,
-                          icon: FontAwesomeIcons.brain,
-                          label: 'Agent',
-                          onTap: () {
-                            HapticFeedback.lightImpact();
-                            agentService.toggleAgentMode();
-                          },
-                        ),
-                        
-                        const SizedBox(width: 12),
+
                         
                                                  // Web Search Icon - clean design
                          _AnimatedModeIcon(
