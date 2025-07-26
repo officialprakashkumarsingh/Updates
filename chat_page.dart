@@ -237,22 +237,31 @@ class ChatPageState extends State<ChatPage> {
       
       final systemMessage = {
         'role': 'system',
-        'content': '''You are AhamAI, an intelligent assistant with access to external tools. You can understand user requests and use appropriate tools when needed.
+        'content': '''You are AhamAI, an intelligent assistant with access to external tools. You can execute tools to help users with various tasks.
 
 Available External Tools:
 $toolsInfo
 
-When a user asks for something that requires external tools (like taking screenshots, searching the web, or switching AI models), you should:
-1. Acknowledge that you have the capability
-2. Explain what tool you would use
-3. Inform the user that you can access these tools on demand
-4. Provide helpful information about what the tool can do
+When you need to use a tool, use the following JSON format (make sure it's properly formatted JSON):
+```json
+{
+  "tool_use": true,
+  "tool_name": "tool_name_here",
+  "parameters": {
+    "param1": "value1",
+    "param2": "value2"
+  }
+}
+```
 
-For screenshots: You can capture any webpage visually using your screenshot tool.
-For model switching: You can fetch available AI models and switch to a different one if the current model isn't performing well.
-For web search: You can search for current information on any topic.
+Examples of when to use tools:
+- For screenshots: When user asks to see a website, capture a webpage, or take a screenshot
+- For model switching: When user asks to change AI model or if they're unsatisfied with responses
+- For fetching models: When user asks what models are available
 
-Be conversational and helpful, and let users know about your external tool capabilities when relevant.'''
+Always use proper JSON format for tool calls. After calling a tool, explain what you did and show the results to the user.
+
+Be conversational and helpful!'''
       };
 
       request.body = json.encode({
@@ -299,15 +308,19 @@ Be conversational and helpful, and let users know about your external tool capab
           }
         }
 
+        // Process completed message for tool calls
+        final processedMessage = await _processToolCalls(accumulatedText);
+        
         setState(() {
-          _messages[botMessageIndex] = botMessage.copyWith(
-            text: accumulatedText,
+          _messages[botMessageIndex] = Message.bot(
+            processedMessage['text'],
             isStreaming: false,
+            toolData: processedMessage['toolData'],
           );
         });
 
         // Update memory with the completed conversation
-        _updateConversationMemory(prompt, accumulatedText);
+        _updateConversationMemory(prompt, processedMessage['text']);
 
       } else {
         setState(() {
@@ -327,6 +340,86 @@ Be conversational and helpful, and let users know about your external tool capab
         setState(() => _awaitingReply = false);
       }
     }
+  }
+
+  /// Process tool calls in AI response and execute them
+  Future<Map<String, dynamic>> _processToolCalls(String responseText) async {
+    Map<String, dynamic> toolData = {};
+    String processedText = responseText;
+    
+    // Look for JSON tool calls in the response
+    final jsonPattern = RegExp(r'```json\s*(\{[^`]*"tool_use"\s*:\s*true[^`]*\})\s*```', dotAll: true);
+    final matches = jsonPattern.allMatches(responseText);
+    
+    for (final match in matches) {
+      try {
+        final jsonStr = match.group(1);
+        if (jsonStr != null) {
+          final toolCall = json.decode(jsonStr);
+          
+          if (toolCall['tool_use'] == true && toolCall['tool_name'] != null) {
+            final toolName = toolCall['tool_name'] as String;
+            final parameters = toolCall['parameters'] as Map<String, dynamic>? ?? {};
+            
+            // Execute the tool
+            final result = await _externalToolsService.executeTool(toolName, parameters);
+            toolData[toolName] = result;
+            
+            // Replace the JSON block with the tool execution result
+            String resultText;
+            if (result['success'] == true) {
+              if (toolName == 'screenshot') {
+                resultText = '''**🖼️ Screenshot Tool Executed Successfully**
+
+**URL:** ${result['url']}
+**Screenshot:** [View Screenshot](${result['preview_url']})
+**Dimensions:** ${result['width']}x${result['height']}
+**Service:** ${result['service']}
+
+✅ Screenshot captured and available for viewing!''';
+              } else if (toolName == 'fetch_ai_models') {
+                final models = result['models'] as List;
+                final modelsList = models.take(10).join(', '); // Show first 10 models
+                resultText = '''**🤖 AI Models Fetched Successfully**
+
+**Available Models:** ${result['total_count']} models found
+**Sample Models:** $modelsList${models.length > 10 ? '...' : ''}
+**API Status:** ${result['api_status']}
+
+✅ Models list retrieved successfully!''';
+                             } else if (toolName == 'switch_ai_model') {
+                 resultText = '''**🔄 AI Model Switch Executed**
+
+**New Model:** ${result['new_model']}
+**Reason:** ${result['reason']}
+**Validation:** ${result['validation']}
+**Status:** ${result['action_completed']}
+
+✅ Model switch completed successfully!''';
+              } else {
+                resultText = '''**🛠️ Tool Executed: $toolName**
+
+✅ ${result['description'] ?? 'Tool executed successfully'}''';
+              }
+            } else {
+              resultText = '''**❌ Tool Execution Failed: $toolName**
+
+Error: ${result['error']}''';
+            }
+            
+            processedText = processedText.replaceAll(match.group(0)!, resultText);
+          }
+        }
+      } catch (e) {
+        // If JSON parsing fails, leave the original text
+        debugPrint('Tool call JSON parsing error: $e');
+      }
+    }
+    
+    return {
+      'text': processedText,
+      'toolData': toolData,
+    };
   }
 
   void _regenerateResponse(int botMessageIndex) {
@@ -899,6 +992,9 @@ class _MessageBubbleState extends State<_MessageBubble> with TickerProviderState
             _ThoughtsPanel(thoughts: widget.message.thoughts),
           if (isBot && widget.message.codes.isNotEmpty)
             _CodePanel(codes: widget.message.codes),
+          // Tool results panel for bot messages
+          if (isBot && widget.message.toolData.isNotEmpty)
+            _ToolResultsPanel(toolData: widget.message.toolData),
           // Agent processing panel removed – agent output will now stream directly in the chat bubble
           if (isUser)
             GestureDetector(
@@ -1765,6 +1861,308 @@ class _ThoughtsPanelState extends State<_ThoughtsPanel> with SingleTickerProvide
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/* ----------------------------------------------------------
+   TOOL RESULTS PANEL - Displays external tool execution results
+---------------------------------------------------------- */
+class _ToolResultsPanel extends StatefulWidget {
+  final Map<String, dynamic> toolData;
+  
+  const _ToolResultsPanel({required this.toolData});
+  
+  @override
+  State<_ToolResultsPanel> createState() => _ToolResultsPanelState();
+}
+
+class _ToolResultsPanelState extends State<_ToolResultsPanel> with SingleTickerProviderStateMixin {
+  bool _isExpanded = true; // Start expanded for better visibility
+  late AnimationController _animationController;
+  late Animation<double> _expandAnimation;
+  
+  @override
+  void initState() {
+    super.initState();
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 300),
+      vsync: this,
+    );
+    _expandAnimation = CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeInOut,
+    );
+    // Start expanded
+    _animationController.forward();
+  }
+  
+  @override
+  void dispose() {
+    _animationController.dispose();
+    super.dispose();
+  }
+  
+  void _toggleExpansion() {
+    setState(() {
+      _isExpanded = !_isExpanded;
+      if (_isExpanded) {
+        _animationController.forward();
+      } else {
+        _animationController.reverse();
+      }
+    });
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.only(top: 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFF4F3F0),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFF000000).withOpacity(0.1)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header with toggle button
+          InkWell(
+            onTap: _toggleExpansion,
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.all(12),
+              child: Row(
+                children: [
+                  Icon(
+                    Icons.build_circle_rounded,
+                    size: 16,
+                    color: const Color(0xFF000000),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Tool Results (${widget.toolData.length})',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        color: const Color(0xFF000000),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  AnimatedRotation(
+                    turns: _isExpanded ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 300),
+                    child: Icon(
+                      Icons.keyboard_arrow_down_rounded,
+                      size: 18,
+                      color: const Color(0xFF000000),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          // Expandable content
+          SizeTransition(
+            sizeFactor: _expandAnimation,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: widget.toolData.entries.map((entry) {
+                  final toolName = entry.key;
+                  final result = entry.value as Map<String, dynamic>;
+                  
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFEAE9E5),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        // Header with tool name and status
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          child: Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: result['success'] == true ? Colors.green : Colors.red,
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                child: Text(
+                                  toolName.toUpperCase(),
+                                  style: GoogleFonts.inter(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: const Color(0xFFFFFFFF),
+                                    letterSpacing: 0.5,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Icon(
+                                result['success'] == true ? Icons.check_circle : Icons.error,
+                                size: 16,
+                                color: result['success'] == true ? Colors.green : Colors.red,
+                              ),
+                              const Spacer(),
+                              if (result['execution_time'] != null)
+                                Text(
+                                  'Executed',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 10,
+                                    color: const Color(0xFFA3A3A3),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                        // Tool result content
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              // Screenshot preview
+                              if (toolName == 'screenshot' && result['success'] == true && result['preview_url'] != null)
+                                Container(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  decoration: BoxDecoration(
+                                    borderRadius: BorderRadius.circular(8),
+                                    border: Border.all(color: const Color(0xFF000000).withOpacity(0.1)),
+                                  ),
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(8),
+                                    child: Image.network(
+                                      result['preview_url'],
+                                      height: 200,
+                                      width: double.infinity,
+                                      fit: BoxFit.cover,
+                                      loadingBuilder: (context, child, loadingProgress) {
+                                        if (loadingProgress == null) return child;
+                                        return Container(
+                                          height: 200,
+                                          alignment: Alignment.center,
+                                          child: CircularProgressIndicator(
+                                            value: loadingProgress.expectedTotalBytes != null
+                                                ? loadingProgress.cumulativeBytesLoaded / loadingProgress.expectedTotalBytes!
+                                                : null,
+                                          ),
+                                        );
+                                      },
+                                      errorBuilder: (context, error, stackTrace) {
+                                        return Container(
+                                          height: 200,
+                                          alignment: Alignment.center,
+                                          child: Column(
+                                            mainAxisAlignment: MainAxisAlignment.center,
+                                            children: [
+                                              Icon(Icons.image_not_supported, size: 48, color: Colors.grey),
+                                              const SizedBox(height: 8),
+                                              Text(
+                                                'Screenshot generating...\nTap to view directly',
+                                                textAlign: TextAlign.center,
+                                                style: TextStyle(color: Colors.grey),
+                                              ),
+                                              const SizedBox(height: 8),
+                                              ElevatedButton(
+                                                onPressed: () => _launchUrl(result['preview_url']),
+                                                child: Text('View Screenshot'),
+                                              ),
+                                            ],
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                  ),
+                                ),
+                              
+                              // Result details
+                              Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: Colors.black87,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    if (result['url'] != null)
+                                      _buildResultRow('URL', result['url']),
+                                    if (result['models'] != null)
+                                      _buildResultRow('Models Count', '${(result['models'] as List).length}'),
+                                    if (result['new_model'] != null)
+                                      _buildResultRow('New Model', result['new_model']),
+                                    if (result['api_status'] != null)
+                                      _buildResultRow('API Status', result['api_status']),
+                                    if (result['error'] != null)
+                                      _buildResultRow('Error', result['error'], isError: true),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildResultRow(String label, String value, {bool isError = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: RichText(
+        text: TextSpan(
+          children: [
+            TextSpan(
+              text: '$label: ',
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                height: 1.4,
+                color: Colors.grey[400],
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            TextSpan(
+              text: value,
+              style: TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
+                height: 1.4,
+                color: isError ? Colors.red[300] : const Color(0xFFFFFFFF),
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  void _launchUrl(String url) {
+    // This would typically use url_launcher package
+    // For now, just copy to clipboard
+    Clipboard.setData(ClipboardData(text: url));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Screenshot URL copied to clipboard'),
+        backgroundColor: Colors.green,
       ),
     );
   }

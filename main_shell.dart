@@ -12,6 +12,7 @@ import 'saved_page.dart';
 import 'models.dart';
 import 'auth_service.dart';
 import 'auth_and_profile_pages.dart';
+import 'external_tools_service.dart';
 
 /* ----------------------------------------------------------
    MAIN SHELL (Tab Navigation)
@@ -48,6 +49,10 @@ class _MainShellState extends State<MainShell> with TickerProviderStateMixin {
   void initState() {
     super.initState();
     _fetchModels();
+    
+    // Set up external tools callback for model switching
+    ExternalToolsService().setModelSwitchCallback(switchModel);
+    
     _fabAnimationController = AnimationController(
       duration: const Duration(milliseconds: 400),
       vsync: this,
@@ -78,6 +83,30 @@ class _MainShellState extends State<MainShell> with TickerProviderStateMixin {
     _fabAnimationController.dispose();
     _pageTransitionController.dispose();
     super.dispose();
+  }
+
+  /// Switch to a different AI model (called by external tools)
+  void switchModel(String modelName) {
+    if (_models.contains(modelName)) {
+      setState(() => _selectedModel = modelName);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '🔄 Switched to $_selectedModel',
+            style: const TextStyle(
+              color: Color(0xFF000000),
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          backgroundColor: Colors.white,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          margin: const EdgeInsets.all(16),
+          elevation: 4,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<void> _fetchModels() async {
