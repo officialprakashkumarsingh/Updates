@@ -1293,25 +1293,7 @@ class _InputBar extends StatelessWidget {
                   // Action icons row
                   Row(
                     children: [
-                                              // External Tools Indicator - shows tools are available
-                        _AnimatedModeIcon(
-                          isActive: externalToolsService.hasScreenshotCapability || externalToolsService.hasModelSwitchingCapability,
-                          icon: FontAwesomeIcons.tools,
-                          label: 'Tools',
-                          onTap: () {
-                            HapticFeedback.lightImpact();
-                            // Show available tools info
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              SnackBar(
-                                content: Text('External tools available: Screenshot, Model Switching, Web Search'),
-                                backgroundColor: const Color(0xFF000000),
-                                duration: const Duration(seconds: 3),
-                              ),
-                            );
-                          },
-                        ),
-                        
-                        const SizedBox(width: 12),
+
                         
                                                  // Web Search Icon - clean design
                          _AnimatedModeIcon(
