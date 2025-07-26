@@ -242,7 +242,8 @@ class ChatPageState extends State<ChatPage> {
 Available External Tools:
 $toolsInfo
 
-When you need to use a tool, use the following JSON format (make sure it's properly formatted JSON):
+🔧 TOOL USAGE:
+When you need to use a single tool, use this JSON format:
 ```json
 {
   "tool_use": true,
@@ -254,12 +255,38 @@ When you need to use a tool, use the following JSON format (make sure it's prope
 }
 ```
 
-Examples of when to use tools:
-- For screenshots: When user asks to see a website, capture a webpage, or take a screenshot
-- For model switching: When user asks to change AI model or if they're unsatisfied with responses
-- For fetching models: When user asks what models are available
+For parallel tool execution (when multiple tools are needed), use this array format:
+```json
+[
+  {
+    "tool_use": true,
+    "tool_name": "first_tool",
+    "parameters": {"param1": "value1"}
+  },
+  {
+    "tool_use": true,
+    "tool_name": "second_tool", 
+    "parameters": {"param2": "value2"}
+  }
+]
+```
 
-Always use proper JSON format for tool calls. After calling a tool, explain what you did and show the results to the user.
+🎯 WHEN TO USE TOOLS:
+- **screenshot**: Capture webpages, see websites visually
+- **generate_image**: Create images, art, visual content (models: flux, turbo)
+- **fetch_image_models**: Show available image generation models
+- **web_search**: Get real-time information from DuckDuckGo and Wikipedia
+- **screenshot_vision**: Analyze screenshots you've captured to understand content
+- **fetch_ai_models**: List available AI chat models
+- **switch_ai_model**: Change to different AI model
+
+🔗 PARALLEL EXECUTION:
+You can now use multiple tools simultaneously! For example:
+- Take screenshot + analyze it with vision
+- Search web + generate related image
+- Fetch models + take screenshot
+
+Always use proper JSON format and explain what you're doing to help the user understand the process.
 
 Be conversational and helpful!'''
       };
@@ -347,11 +374,50 @@ Be conversational and helpful!'''
     Map<String, dynamic> toolData = {};
     String processedText = responseText;
     
-    // Look for JSON tool calls in the response
-    final jsonPattern = RegExp(r'```json\s*(\{[^`]*"tool_use"\s*:\s*true[^`]*\})\s*```', dotAll: true);
-    final matches = jsonPattern.allMatches(responseText);
+    // Look for single JSON tool calls
+    final singleJsonPattern = RegExp(r'```json\s*(\{[^`]*"tool_use"\s*:\s*true[^`]*\})\s*```', dotAll: true);
     
-    for (final match in matches) {
+    // Look for parallel tool calls (array of tool calls)
+    final parallelJsonPattern = RegExp(r'```json\s*(\[[^`]*"tool_use"\s*:\s*true[^`]*\])\s*```', dotAll: true);
+    
+    final singleMatches = singleJsonPattern.allMatches(responseText);
+    final parallelMatches = parallelJsonPattern.allMatches(responseText);
+    
+    // Handle parallel tool calls first
+    for (final match in parallelMatches) {
+      try {
+        final jsonStr = match.group(1);
+        if (jsonStr != null) {
+          final toolCalls = json.decode(jsonStr) as List;
+          final validToolCalls = toolCalls.where((call) => 
+            call is Map<String, dynamic> && 
+            call['tool_use'] == true && 
+            call['tool_name'] != null
+          ).cast<Map<String, dynamic>>().toList();
+          
+          if (validToolCalls.isNotEmpty) {
+            // Execute tools in parallel
+            final results = await _externalToolsService.executeToolsParallel(validToolCalls);
+            toolData.addAll(results);
+            
+            // Build combined result text
+            String combinedResultText = '**🔧 Parallel Tools Executed**\n\n';
+            for (final call in validToolCalls) {
+              final toolName = call['tool_name'] as String;
+              final result = results[toolName];
+              combinedResultText += _formatToolResult(toolName, result ?? {}) + '\n\n';
+            }
+            
+            processedText = processedText.replaceAll(match.group(0)!, combinedResultText.trim());
+          }
+        }
+      } catch (e) {
+        debugPrint('Parallel tool call JSON parsing error: $e');
+      }
+    }
+    
+    // Handle single tool calls
+    for (final match in singleMatches) {
       try {
         final jsonStr = match.group(1);
         if (jsonStr != null) {
@@ -366,47 +432,7 @@ Be conversational and helpful!'''
             toolData[toolName] = result;
             
             // Replace the JSON block with the tool execution result
-            String resultText;
-            if (result['success'] == true) {
-              if (toolName == 'screenshot') {
-                resultText = '''**🖼️ Screenshot Tool Executed Successfully**
-
-**URL:** ${result['url']}
-**Screenshot:** [View Screenshot](${result['preview_url']})
-**Dimensions:** ${result['width']}x${result['height']}
-**Service:** ${result['service']}
-
-✅ Screenshot captured and available for viewing!''';
-              } else if (toolName == 'fetch_ai_models') {
-                final models = result['models'] as List;
-                final modelsList = models.take(10).join(', '); // Show first 10 models
-                resultText = '''**🤖 AI Models Fetched Successfully**
-
-**Available Models:** ${result['total_count']} models found
-**Sample Models:** $modelsList${models.length > 10 ? '...' : ''}
-**API Status:** ${result['api_status']}
-
-✅ Models list retrieved successfully!''';
-                             } else if (toolName == 'switch_ai_model') {
-                 resultText = '''**🔄 AI Model Switch Executed**
-
-**New Model:** ${result['new_model']}
-**Reason:** ${result['reason']}
-**Validation:** ${result['validation']}
-**Status:** ${result['action_completed']}
-
-✅ Model switch completed successfully!''';
-              } else {
-                resultText = '''**🛠️ Tool Executed: $toolName**
-
-✅ ${result['description'] ?? 'Tool executed successfully'}''';
-              }
-            } else {
-              resultText = '''**❌ Tool Execution Failed: $toolName**
-
-Error: ${result['error']}''';
-            }
-            
+            String resultText = _formatToolResult(toolName, result);
             processedText = processedText.replaceAll(match.group(0)!, resultText);
           }
         }
@@ -420,6 +446,122 @@ Error: ${result['error']}''';
       'text': processedText,
       'toolData': toolData,
     };
+  }
+
+  /// Format tool execution result for display
+  String _formatToolResult(String toolName, Map<String, dynamic> result) {
+    if (result['success'] == true) {
+      switch (toolName) {
+        case 'screenshot':
+          // Handle multiple screenshots if they exist
+          if (result.containsKey('screenshots') && result['screenshots'] is List) {
+            final screenshots = result['screenshots'] as List;
+            String screenshotLinks = '';
+            for (int i = 0; i < screenshots.length; i++) {
+              final screenshot = screenshots[i];
+              screenshotLinks += '**Screenshot ${i + 1}:** [View Screenshot](${screenshot['preview_url']})\n';
+            }
+            return '''**🖼️ Multiple Screenshots Captured Successfully**
+
+$screenshotLinks
+**Service:** ${result['service']}
+
+✅ All screenshots captured and available for viewing!''';
+          } else {
+            return '''**🖼️ Screenshot Tool Executed Successfully**
+
+**URL:** ${result['url']}
+**Screenshot:** [View Screenshot](${result['preview_url']})
+**Dimensions:** ${result['width']}x${result['height']}
+**Service:** ${result['service']}
+
+✅ Screenshot captured and available for viewing!''';
+          }
+
+        case 'fetch_ai_models':
+          final models = result['models'] as List;
+          final modelsList = models.take(10).join(', ');
+          return '''**🤖 AI Models Fetched Successfully**
+
+**Available Models:** ${result['total_count']} models found
+**Sample Models:** $modelsList${models.length > 10 ? '...' : ''}
+**API Status:** ${result['api_status']}
+
+✅ Models list retrieved successfully!''';
+
+        case 'switch_ai_model':
+          return '''**🔄 AI Model Switch Executed**
+
+**New Model:** ${result['new_model']}
+**Reason:** ${result['reason']}
+**Validation:** ${result['validation']}
+**Status:** ${result['action_completed']}
+
+✅ Model switch completed successfully!''';
+
+        case 'generate_image':
+          return '''**🎨 Image Generated Successfully**
+
+**Prompt:** ${result['prompt']}
+**Model:** ${result['model']}
+**Dimensions:** ${result['width']}x${result['height']}
+**Image Size:** ${(result['image_size'] as int? ?? 0) ~/ 1024}KB
+
+![Generated Image](${result['image_url']})
+
+✅ Image generated successfully using ${result['model']} model!''';
+
+        case 'fetch_image_models':
+          final models = result['model_names'] as List;
+          final modelsList = models.take(5).join(', ');
+          return '''**🎨 Image Models Fetched Successfully**
+
+**Available Models:** ${result['total_count']} models found
+**Sample Models:** $modelsList${models.length > 5 ? '...' : ''}
+**API Status:** ${result['api_status']}
+
+✅ Image models list retrieved successfully!''';
+
+        case 'web_search':
+          final results = result['results'] as List;
+          String resultsList = '';
+          for (int i = 0; i < results.length && i < 3; i++) {
+            final res = results[i] as Map<String, dynamic>;
+            resultsList += '${i + 1}. **${res['title']}** (${res['source']})\n';
+            resultsList += '   ${res['snippet']}\n';
+            if (res['url']?.toString().isNotEmpty == true) {
+              resultsList += '   🔗 [Read more](${res['url']})\n';
+            }
+            resultsList += '\n';
+          }
+          return '''**🔍 Web Search Completed Successfully**
+
+**Query:** ${result['query']}
+**Source:** ${result['source']}
+**Results Found:** ${result['total_found']}
+
+**Top Results:**
+$resultsList✅ Web search completed successfully!''';
+
+        case 'screenshot_vision':
+          return '''**👁️ Screenshot Vision Analysis Completed**
+
+**Question:** ${result['question']}
+**Model:** ${result['model']}
+**Analysis:** ${result['answer']}
+
+✅ Screenshot analyzed successfully using vision AI!''';
+
+        default:
+          return '''**🛠️ Tool Executed: $toolName**
+
+✅ ${result['description'] ?? 'Tool executed successfully'}''';
+      }
+    } else {
+      return '''**❌ Tool Execution Failed: $toolName**
+
+Error: ${result['error']}''';
+    }
   }
 
   void _regenerateResponse(int botMessageIndex) {
@@ -745,11 +887,16 @@ Error: ${result['error']}''';
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                   const SizedBox(width: 12),
-                  Text(
-                    'Using external tool: ${_externalToolsService.lastToolUsed}',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: Color(0xFF666666),
+                  Expanded(
+                    child: Text(
+                      _externalToolsService.currentlyExecutingTools.length > 1
+                          ? 'Executing ${_externalToolsService.currentlyExecutingTools.length} tools in parallel: ${_externalToolsService.currentlyExecutingTools.join(", ")}'
+                          : 'Using external tool: ${_externalToolsService.lastToolUsed}',
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Color(0xFF666666),
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                 ],
@@ -1331,7 +1478,7 @@ class _InputBar extends StatelessWidget {
                                   ? 'Web search mode - Ask me anything...'
                                   : uploadedImagePath != null
                                       ? 'Image uploaded - Describe or ask about it...'
-                                      : 'Message AhamAI (with external tools)...',
+                                      : 'Message AhamAI (images, web search, screenshots, vision)...',
                       hintStyle: const TextStyle(
                         color: Color(0xFFA3A3A3),
                         fontSize: 16,

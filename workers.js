@@ -101,6 +101,10 @@ export default {
       return handleImage(request, corsHeaders);
     }
 
+    if (path === "/images" && request.method === "POST") {
+      return handleImage(request, corsHeaders);
+    }
+
     if (path === "/v1/models" && request.method === "GET") {
       return handleModelList(corsHeaders);
     }
